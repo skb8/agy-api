@@ -312,7 +312,7 @@ func usageResult(usage *tokenUsage) object {
 }
 
 func upstreamFailure(w http.ResponseWriter, err error) {
-	log.Printf("Upstream request: %v", err)
+	log.Printf("Upstream request: %s", upstreamLogError(err))
 	var remote *upstreamError
 	if errors.As(err, &remote) {
 		switch remote.status {

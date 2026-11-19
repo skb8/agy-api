@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -176,5 +177,18 @@ func TestModelsWhenProjectDiscoveryIsForbidden(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestServiceDisabledLog(t *testing.T) {
+	res := &http.Response{StatusCode: http.StatusForbidden}
+	res.Body = io.NopCloser(strings.NewReader(`{"error":{"status":"PERMISSION_DENIED","message":"private details","details":[{"reason":"SERVICE_DISABLED","metadata":{"service":"cloudcode-pa.googleapis.com","consumer":"projects/123456"}}]}}`))
+	err := readUpstreamError(res, "loadCodeAssist")
+	const want = "Antigravity loadCodeAssist returned HTTP 403 (PERMISSION_DENIED / SERVICE_DISABLED)"
+	if err.Error() != want {
+		t.Fatalf("public error = %q", err.Error())
+	}
+	if got := upstreamLogError(err); got != want+" service=cloudcode-pa.googleapis.com consumer=projects/123456" {
+		t.Fatalf("diagnostic log = %q", got)
 	}
 }

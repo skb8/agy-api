@@ -32,9 +32,11 @@ type antigravity struct {
 }
 
 type upstreamError struct {
-	status int
-	action string
-	detail string
+	status   int
+	action   string
+	detail   string
+	service  string
+	consumer string
 }
 
 func (e *upstreamError) Error() string {
@@ -51,7 +53,11 @@ func readUpstreamError(res *http.Response, action string) error {
 		Error struct {
 			Status  string
 			Details []struct {
-				Reason string
+				Reason   string
+				Metadata struct {
+					Service  string
+					Consumer string
+				}
 			}
 		}
 	}
@@ -65,11 +71,24 @@ func readUpstreamError(res *http.Response, action string) error {
 	if isErrorCode(body.Error.Status) {
 		codes = append(codes, body.Error.Status)
 	}
+	var reason string
 	for _, detail := range body.Error.Details {
-		if isErrorCode(detail.Reason) && detail.Reason != body.Error.Status {
-			codes = append(codes, detail.Reason)
+		if detail.Reason == "SERVICE_DISABLED" {
+			reason = detail.Reason
+			if service := detail.Metadata.Service; strings.HasSuffix(service, ".googleapis.com") && isIdentifier(service, ".-") {
+				failure.service = service
+			}
+			if consumer, ok := strings.CutPrefix(detail.Metadata.Consumer, "projects/"); ok && isIdentifier(consumer, "-") {
+				failure.consumer = detail.Metadata.Consumer
+			}
 			break
 		}
+		if reason == "" && isErrorCode(detail.Reason) && detail.Reason != body.Error.Status {
+			reason = detail.Reason
+		}
+	}
+	if reason != "" && reason != body.Error.Status {
+		codes = append(codes, reason)
 	}
 	failure.detail = strings.Join(codes, " / ")
 	return failure
@@ -85,6 +104,39 @@ func isErrorCode(s string) bool {
 		}
 	}
 	return true
+}
+
+func isIdentifier(s, separators string) bool {
+	if len(s) == 0 || len(s) > 100 {
+		return false
+	}
+	for _, c := range s {
+		if (c < 'a' || c > 'z') && (c < '0' || c > '9') && !strings.ContainsRune(separators, c) {
+			return false
+		}
+	}
+	return true
+}
+
+func upstreamLogError(err error) string {
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		var details []string
+		for _, cause := range joined.Unwrap() {
+			details = append(details, upstreamLogError(cause))
+		}
+		return strings.Join(details, "\n")
+	}
+	message := err.Error()
+	var remote *upstreamError
+	if errors.As(err, &remote) {
+		if remote.service != "" {
+			message += " service=" + remote.service
+		}
+		if remote.consumer != "" {
+			message += " consumer=" + remote.consumer
+		}
+	}
+	return message
 }
 
 func (a *antigravity) post(ctx context.Context, action string, body any) (*http.Response, error) {

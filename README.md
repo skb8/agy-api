@@ -4,7 +4,7 @@
 
 ## Первый запуск
 
-1. Создайте OAuth-клиент типа **Desktop app** в своём проекте Google Cloud или возьмите credentials клиента, которым вам разрешено пользоваться. Добавьте свой аккаунт в список тестовых пользователей, если приложение в режиме Testing. OAuth-клиент и аккаунт должны иметь доступ к сервису и scopes Antigravity.
+1. Подготовьте OAuth-клиент типа **Desktop app**, которому Google предоставил доступ к внутреннему API Antigravity. Клиент и аккаунт должны иметь доступ к нужным scopes. Обычная регистрация OAuth-клиента в Google Cloud позволяет начать вход, но доступ к внутреннему API предоставляется отдельно. Если приложение в режиме Testing, добавьте свой аккаунт в список тестовых пользователей.
 2. Скопируйте `.env.example` в `.env` и заполните `ANTIGRAVITY_OAUTH_CLIENT_ID` и `ANTIGRAVITY_OAUTH_CLIENT_SECRET` из настроек клиента.
 3. Запустите `go run .` из каталога проекта (Go 1.25+) или запустите готовый бинарник из каталога с `.env`. Готовые бинарники для Linux, macOS и Windows лежат в артефакте `agy-api-binaries` успешной сборки на вкладке [Actions](https://github.com/skb8/agy-api/actions).
 4. Откройте напечатанную ссылку в браузере на той же машине и войдите в Google. Прокси сохранит access token, refresh token и срок действия в `.env`. Первый запуск генерирует локальный API-ключ. Следующие запуски выводят тот же ключ и обновляют токены по мере необходимости. Для повторного входа используйте `go run . --login` или запустите бинарник с `--login`.
@@ -27,3 +27,7 @@ curl http://127.0.0.1:8080/v1/chat/completions \
 ```
 
 Прокси использует внутренний интерфейс Antigravity `v1internal`. Доступ к нему и моделям зависит от аккаунта, OAuth-клиента и изменений на стороне Google. Схема запросов сверена с [AIClient2API](https://github.com/justlovemaki/AIClient2API) и [OmniRoute](https://github.com/ChrisCompton/omniroute).
+
+### HTTP 403 с причиной `SERVICE_DISABLED`
+
+В терминале ищите `service=` и `consumer=projects/…`. Эти поля идентифицируют сервис и проект, для которого Google проверил доступ. Если проект ваш и нужный сервис доступен вам в API Library, включите его в этом проекте. Для `cloudcode-pa.googleapis.com` может потребоваться отдельный доступ от Google. Доступ к Cloud Code Private API настраивается отдельно от публичного Gemini API и `ANTIGRAVITY_PROJECT_ID`.

@@ -87,7 +87,7 @@ func run(ctx context.Context, login bool) error {
 		defer cancel()
 		models, err := upstream.models(discovery)
 		if err != nil {
-			log.Printf("Could not list models on startup: %v", err)
+			log.Printf("Could not list models on startup: %s", upstreamLogError(err))
 			return
 		}
 		fmt.Println("Available models:")
