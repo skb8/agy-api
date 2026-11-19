@@ -1,0 +1,7 @@
+.env
+.env.*
+.env-write-*
+!.env.example
+/agy-api
+/agy-api.exe
+/dist/
