@@ -22,9 +22,10 @@ type tokenSource interface {
 }
 
 type antigravity struct {
-	client  *http.Client
-	auth    tokenSource
-	baseURL string
+	client     *http.Client
+	auth       tokenSource
+	baseURL    string
+	projectURL string
 
 	mu      sync.Mutex
 	project string
@@ -33,13 +34,64 @@ type antigravity struct {
 type upstreamError struct {
 	status int
 	action string
+	detail string
 }
 
 func (e *upstreamError) Error() string {
-	return fmt.Sprintf("Antigravity %s returned HTTP %d", e.action, e.status)
+	message := fmt.Sprintf("Antigravity %s returned HTTP %d", e.action, e.status)
+	if e.detail != "" {
+		message += " (" + e.detail + ")"
+	}
+	return message
+}
+
+func readUpstreamError(res *http.Response, action string) error {
+	failure := &upstreamError{status: res.StatusCode, action: action}
+	var body struct {
+		Error struct {
+			Status  string
+			Details []struct {
+				Reason string
+			}
+		}
+	}
+	if json.NewDecoder(io.LimitReader(res.Body, 64<<10)).Decode(&body) != nil {
+		if strings.HasPrefix(res.Header.Get("Content-Type"), "text/html") {
+			failure.detail = "HTML response"
+		}
+		return failure
+	}
+	var codes []string
+	if isErrorCode(body.Error.Status) {
+		codes = append(codes, body.Error.Status)
+	}
+	for _, detail := range body.Error.Details {
+		if isErrorCode(detail.Reason) && detail.Reason != body.Error.Status {
+			codes = append(codes, detail.Reason)
+			break
+		}
+	}
+	failure.detail = strings.Join(codes, " / ")
+	return failure
+}
+
+func isErrorCode(s string) bool {
+	if len(s) == 0 || len(s) > 80 {
+		return false
+	}
+	for _, c := range s {
+		if (c < 'A' || c > 'Z') && (c < '0' || c > '9') && c != '_' {
+			return false
+		}
+	}
+	return true
 }
 
 func (a *antigravity) post(ctx context.Context, action string, body any) (*http.Response, error) {
+	baseURL := a.baseURL
+	if action == "loadCodeAssist" && a.projectURL != "" {
+		baseURL = a.projectURL
+	}
 	data, err := json.Marshal(body)
 	if err != nil {
 		return nil, err
@@ -50,7 +102,7 @@ func (a *antigravity) post(ctx context.Context, action string, body any) (*http.
 		if err != nil {
 			return nil, err
 		}
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, a.baseURL+"/v1internal:"+action, bytes.NewReader(data))
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+"/v1internal:"+action, bytes.NewReader(data))
 		if err != nil {
 			return nil, err
 		}
@@ -64,10 +116,12 @@ func (a *antigravity) post(ctx context.Context, action string, body any) (*http.
 		if res.StatusCode == http.StatusOK {
 			return res, nil
 		}
-		res.Body.Close()
 		if res.StatusCode != http.StatusUnauthorized || attempt == 1 {
-			return nil, &upstreamError{res.StatusCode, action}
+			err := readUpstreamError(res, strings.SplitN(action, "?", 2)[0])
+			res.Body.Close()
+			return nil, err
 		}
+		res.Body.Close()
 		rejected = token
 	}
 	return nil, errors.New("Antigravity rejected the OAuth token")
@@ -104,15 +158,18 @@ func (a *antigravity) projectID(ctx context.Context) (string, error) {
 }
 
 func (a *antigravity) models(ctx context.Context) ([]string, error) {
-	project, err := a.projectID(ctx)
-	if err != nil {
-		return nil, err
+	project, projectErr := a.projectID(ctx)
+	if projectErr != nil {
+		var remote *upstreamError
+		if !errors.As(projectErr, &remote) || remote.status != http.StatusForbidden {
+			return nil, projectErr
+		}
 	}
 	res, err := a.post(ctx, "fetchAvailableModels", struct {
 		Project string `json:"project,omitempty"`
 	}{project})
 	if err != nil {
-		return nil, err
+		return nil, errors.Join(err, projectErr)
 	}
 	defer res.Body.Close()
 	var result struct {

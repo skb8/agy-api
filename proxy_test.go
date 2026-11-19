@@ -123,3 +123,58 @@ func TestInterruptedStream(t *testing.T) {
 		t.Fatalf("interrupted stream looked successful: %s", w.Body)
 	}
 }
+
+func TestModelsWhenProjectDiscoveryIsForbidden(t *testing.T) {
+	for _, denyModels := range []bool{false, true} {
+		t.Run(fmt.Sprintf("denyModels=%t", denyModels), func(t *testing.T) {
+			projects := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != "/v1internal:loadCodeAssist" {
+					t.Errorf("unexpected project method: %s", r.URL.Path)
+				}
+				w.WriteHeader(http.StatusForbidden)
+				fmt.Fprint(w, `{"error":{"status":"PERMISSION_DENIED","details":[{"reason":"ACCESS_TOKEN_SCOPE_INSUFFICIENT"}]}}`)
+			}))
+			defer projects.Close()
+			models := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var body map[string]any
+				if err := json.NewDecoder(r.Body).Decode(&body); err != nil || len(body) != 0 ||
+					r.URL.Path != "/v1internal:fetchAvailableModels" || r.Header.Get("Authorization") != "Bearer token" {
+					t.Error("expected authenticated model list request with an empty body object")
+				}
+				if denyModels {
+					w.Header().Set("Content-Type", "text/html")
+					w.WriteHeader(http.StatusForbidden)
+					fmt.Fprint(w, "<html>raw diagnostic</html>")
+					return
+				}
+				fmt.Fprint(w, `{"models":{"a-model":{}}}`)
+			}))
+			defer models.Close()
+
+			auth := &googleOAuth{tokens: oauthTokens{Access: "token", Expiry: time.Now().Add(time.Hour)}}
+			api := proxy{"local-key", &antigravity{client: models.Client(), auth: auth, baseURL: models.URL, projectURL: projects.URL}}.routes()
+			w := httptest.NewRecorder()
+			r := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+			r.Header.Set("Authorization", "Bearer local-key")
+			api.ServeHTTP(w, r)
+			if denyModels {
+				if w.Code != 403 || !strings.Contains(w.Body.String(), "fetchAvailableModels returned HTTP 403 (HTML response)") ||
+					strings.Contains(w.Body.String(), "raw diagnostic") {
+					t.Fatalf("model error: %d %s", w.Code, w.Body)
+				}
+			} else if w.Code != 200 || !strings.Contains(w.Body.String(), `"id":"a-model"`) {
+				t.Fatalf("model response: %d %s", w.Code, w.Body)
+			}
+			if denyModels {
+				r = httptest.NewRequest(http.MethodPost, "/v1/chat/completions",
+					strings.NewReader(`{"model":"a-model","messages":[{"role":"user","content":"hi"}]}`))
+				r.Header.Set("Authorization", "Bearer local-key")
+				w = httptest.NewRecorder()
+				api.ServeHTTP(w, r)
+				if w.Code != 403 || !strings.Contains(w.Body.String(), "PERMISSION_DENIED / ACCESS_TOKEN_SCOPE_INSUFFICIENT") {
+					t.Fatalf("chat project error: %d %s", w.Code, w.Body)
+				}
+			}
+		})
+	}
+}

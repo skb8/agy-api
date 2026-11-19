@@ -67,10 +67,11 @@ func run(ctx context.Context, login bool) error {
 	defer listener.Close()
 
 	upstream := &antigravity{
-		client:  client,
-		auth:    oauth,
-		baseURL: "https://daily-cloudcode-pa.googleapis.com",
-		project: env.config("ANTIGRAVITY_PROJECT_ID"),
+		client:     client,
+		auth:       oauth,
+		baseURL:    "https://daily-cloudcode-pa.googleapis.com",
+		projectURL: "https://cloudcode-pa.googleapis.com",
+		project:    env.config("ANTIGRAVITY_PROJECT_ID"),
 	}
 	server := &http.Server{
 		Handler:           proxy{key: key, upstream: upstream}.routes(),
